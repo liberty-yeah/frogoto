@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recursive Minimalist Notepad Pro</title>
+    <style>
+        :root { 
+            --primary: #1976d2; 
+            --danger: #d32f2f; 
+            --bg: #ffffff; 
+            --sidebar-w: 50px;
+            --border: #e0e0e0;
+            --overlay-bg: rgba(255, 255, 255, 0.98);
+            --line-h: 28px;
+            --highlight: rgba(138, 43, 226, 0.08); /* Light Violet */
+        }
+
+        body, html { 
+            margin: 0; padding: 0; height: 100%; width: 100%;
+            font-family: 'Segoe UI', system-ui, sans-serif; 
+            display: flex; overflow: hidden; background: var(--bg);
+        }
+
+        /* --- Sidebar --- */
+        #sidebar {
+            width: var(--sidebar-w);
+            background: #fcfcfc;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 15px;
+            gap: 12px;
+            z-index: 100;
+        }
+
+        .side-btn {
+            width: 32px; height: 32px;
+            display: flex; align-items: center; justify-content: center;
+            border-radius: 6px; border: 1px solid var(--border);
+            background: white; cursor: pointer; position: relative;
+            font-size: 14px; transition: 0.2s;
+        }
+        .side-btn:hover { background: #f0f0f0; border-color: #bbb; }
+        .side-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+        .side-btn.danger-active { background: var(--danger); color: white; border-color: var(--danger); }
+
+        .side-btn::after {
+            content: attr(data-tip);
+            position: absolute; left: 45px; top: 50%;
+            transform: translateY(-50%);
+            background: #333; color: white;
+            padding: 4px 8px; border-radius: 4px;
+            font-size: 12px; white-space: nowrap;
+            opacity: 0; pointer-events: none; transition: 0.2s;
+            z-index: 1000;
+        }
+        .side-btn:hover::after { opacity: 1; left: 55px; }
+
+        /* --- Main Content --- */
+        #main {
+            flex-grow: 1; display: flex; flex-direction: column;
+            width: calc(100% - var(--sidebar-w));
+            position: relative;
+        }
+
+        #breadcrumb-wrapper {
+            height: 40px; border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; padding: 0 15px;
+            overflow-x: auto; white-space: nowrap;
+        }
+
+        .crumb { color: var(--primary); cursor: pointer; font-weight: 500; font-size: 14px; }
+        .sep { margin: 0 8px; color: #ccc; }
+
+        /* --- Editor Container: The alignment anchor --- */
+        #editor-container {
+            flex-grow: 1; display: flex; position: relative; overflow: hidden;
+            padding-top: 20px; /* Global top padding for all internal elements */
+        }
+
+        #line-numbers {
+            width: 45px; 
+            padding: 0 5px; 
+            text-align: right;
+            font-family: monospace; 
+            font-size: 16px; 
+            color: #ccc;
+            background: #fcfcfc; 
+            border-right: 1px solid var(--border);
+            user-select: none; 
+            display: none; 
+            overflow: hidden;
+            box-sizing: border-box;
+            line-height: var(--line-h) !important;
+            z-index: 2;
+        }
+
+        #notepad {
+            flex-grow: 1; 
+            padding: 0 20px 20px 20px; 
+            outline: none;
+            font-size: 16px; 
+            overflow-y: auto;
+            white-space: pre-wrap; 
+            word-break: break-word;
+            box-sizing: border-box;
+            line-height: var(--line-h) !important;
+            z-index: 1;
+            position: relative;
+            background-attachment: local;
+        }
+
+        /* --- Grid Lines --- */
+        #notepad.show-grid {
+            background-image: linear-gradient(var(--border) 1px, transparent 1px);
+            background-size: 100% var(--line-h);
+            background-position: 0 -1px; /* Align to text baseline */
+        }
+
+        /* --- Line Highlight --- */
+        #current-line-highlight {
+            position: absolute;
+            left: 0; right: 0;
+            height: var(--line-h);
+            background-color: var(--highlight);
+            pointer-events: none;
+            display: none;
+            z-index: 0;
+            /* Initial top set by JS */
+        }
+
+        .no-wrap { white-space: pre !important; word-break: normal !important; overflow-x: auto !important; }
+        .show-lines { display: block !important; }
+
+        .nested-pill {
+            background: #e3f2fd; color: var(--primary); border: 1px solid var(--primary);
+            border-radius: 4px; padding: 0 6px; cursor: pointer;
+            font-weight: 600; display: inline-flex; align-items: center;
+            user-select: none; margin: 0 2px; font-size: 0.85em;
+            height: 22px; vertical-align: middle; line-height: 1;
+        }
+
+        #nav-overlay {
+            position: absolute; top: 0; right: -400px; width: 350px; height: 100%;
+            background: var(--overlay-bg); border-left: 1px solid var(--border);
+            box-shadow: -5px 0 15px rgba(0,0,0,0.05);
+            transition: 0.3s ease; z-index: 500;
+            display: flex; flex-direction: column; padding: 20px;
+        }
+        #nav-overlay.open { right: 0; }
+        .nav-item { padding: 8px 12px; margin: 4px 0; border-radius: 4px; cursor: pointer; }
+        .nav-item:hover { background: #f0f7ff; }
+        .nav-indent { border-left: 2px solid #ddd; margin-left: 15px; padding-left: 10px; }
+
+        #fileInput { display: none; }
+    </style>
+</head>
+<body>
+
+    <aside id="sidebar">
+        <button class="side-btn" data-tip="Map View" onclick="toggleNav()">🗺️</button>
+        <button class="side-btn" data-tip="Create Nested" onclick="createNewNest()">🌱</button>
+        <button id="deleteModeBtn" class="side-btn" data-tip="Delete Mode (OFF)" onclick="toggleDeleteMode()" style="color:var(--danger)">❌</button>
+        <button id="lockBtn" class="side-btn" data-tip="Enable Auto-Save" onclick="togglePersistence()">⏳</button>
+        <hr style="width: 60%; border: 0; border-top: 1px solid #eee;">
+        <button class="side-btn" data-tip="Bold" onclick="execCmd('bold')"><b>B</b></button>
+        <button class="side-btn" data-tip="Italic" onclick="execCmd('italic')"><i>I</i></button>
+        <hr style="width: 60%; border: 0; border-top: 1px solid #eee;">
+        <button id="gridBtn" class="side-btn" data-tip="Toggle Grid Lines" onclick="toggleGrid()">田</button>
+        <button id="wrapBtn" class="side-btn active" data-tip="Toggle Word Wrap" onclick="toggleWrap()">W</button>
+        <button id="lineBtn" class="side-btn" data-tip="Toggle Line Numbers" onclick="toggleLines()">#</button>
+        <hr style="width: 60%; border: 0; border-top: 1px solid #eee;">
+        <button class="side-btn" data-tip="Save" onclick="downloadBackup()">💾</button>
+        <button class="side-btn" data-tip="Load" onclick="document.getElementById('fileInput').click()">📁</button>
+        <button class="side-btn" data-tip="Reset Everything" onclick="resetAll()" style="color:var(--danger)">✖</button>
+    </aside>
+
+    <main id="main">
+        <div id="breadcrumb-wrapper">
+            <div id="breadcrumb-container"></div>
+        </div>
+        
+        <div id="editor-container">
+            <div id="line-numbers"></div>
+            <div id="current-line-highlight"></div>
+            <div id="notepad" contenteditable="true" spellcheck="false"></div>
+        </div>
+
+        <div id="nav-overlay">
+            <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3 style="margin:0">Note Map</h3>
+                <button onclick="toggleNav()" style="border:none; background:none; cursor:pointer; font-size:20px;">×</button>
+            </div>
+            <div id="nav-tree" style="overflow-y:auto; flex-grow:1;"></div>
+        </div>
+    </main>
+
+    <input type="file" id="fileInput" accept=".json" onchange="uploadBackup(event)">
+
+    <script>
+        const notepad = document.getElementById('notepad');
+        const breadcrumbContainer = document.getElementById('breadcrumb-container');
+        const lineNumbers = document.getElementById('line-numbers');
+        const highlight = document.getElementById('current-line-highlight');
+        const navOverlay = document.getElementById('nav-overlay');
+        const navTree = document.getElementById('nav-tree');
+        
+        let isPersistent = localStorage.getItem('nest_persistent') === 'true';
+        let isDeleteMode = false;
+        const STORAGE_KEY = 'nest_notebook_data';
+
+        let notebookData = { 'root': { name: 'Root', content: '', children: [] } };
+        let path = ['root'];
+
+        function getCurrentId() { return path[path.length - 1]; }
+
+        function render() {
+            const currentId = getCurrentId();
+            notepad.innerHTML = notebookData[currentId].content || '';
+            renderBreadcrumbs();
+            updateLineNumbers();
+            updateHighlight();
+        }
+
+        function renderBreadcrumbs() {
+            breadcrumbContainer.innerHTML = '';
+            path.forEach((id, index) => {
+                const span = document.createElement('span');
+                span.className = 'crumb';
+                span.innerText = notebookData[id].name;
+                span.onclick = () => {
+                    path = path.slice(0, index + 1);
+                    render();
+                    saveToLocalStorage();
+                };
+                breadcrumbContainer.appendChild(span);
+                if (index < path.length - 1) {
+                    const sep = document.createElement('span');
+                    sep.className = 'sep';
+                    sep.innerText = '»';
+                    breadcrumbContainer.appendChild(sep);
+                }
+            });
+            document.getElementById('breadcrumb-wrapper').scrollLeft = 10000;
+        }
+
+        function updateLineNumbers() {
+            if (!lineNumbers.classList.contains('show-lines')) return;
+            const lines = notepad.innerText.split('\n');
+            const lineCount = lines.length || 1;
+            let html = '';
+            for (let i = 1; i <= lineCount; i++) {
+                html += `<div style="height:28px; box-sizing:border-box;">${i}</div>`;
+            }
+            lineNumbers.innerHTML = html;
+        }
+
+        // --- Grid & Highlight Logic ---
+        function toggleGrid() {
+            notepad.classList.toggle('show-grid');
+            document.getElementById('gridBtn').classList.toggle('active');
+        }
+
+        function updateHighlight() {
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0 && document.activeElement === notepad) {
+                const range = selection.getRangeAt(0);
+                const rect = range.getBoundingClientRect();
+                const editorRect = notepad.getBoundingClientRect();
+                
+                // Calculate line index relative to notepad's 0,0 (accounting for scroll)
+                const relativeTop = rect.top - editorRect.top + notepad.scrollTop;
+                const lineIndex = Math.floor(relativeTop / 28);
+                
+                // Adjust for the editor-container's 20px padding-top and scroll
+                const finalTop = (lineIndex * 28) + 20 - notepad.scrollTop;
+
+                highlight.style.display = 'block';
+                highlight.style.top = finalTop + 'px';
+            } else {
+                highlight.style.display = 'none';
+            }
+        }
+
+        notepad.addEventListener('input', () => {
+            notebookData[getCurrentId()].content = notepad.innerHTML;
+            updateLineNumbers();
+            updateHighlight();
+            saveToLocalStorage();
+        });
+
+        notepad.addEventListener('scroll', () => { 
+            lineNumbers.scrollTop = notepad.scrollTop;
+            updateHighlight(); 
+        });
+
+        notepad.addEventListener('keyup', updateHighlight);
+        notepad.addEventListener('click', updateHighlight);
+        notepad.addEventListener('blur', () => { 
+            setTimeout(() => highlight.style.display = 'none', 150); 
+        });
+
+        // --- Note Logic ---
+        function createNewNest() {
+            const selection = window.getSelection();
+            let label = selection.toString().trim();
+            if (!label) {
+                label = prompt("Name of nested note:", "");
+                if (label === null) return;
+            }
+
+            const newId = 'note_' + Date.now();
+            notebookData[newId] = { name: label || '...', content: '', children: [] };
+            
+            if(!notebookData[getCurrentId()].children) notebookData[getCurrentId()].children = [];
+            notebookData[getCurrentId()].children.push(newId);
+
+            const pill = document.createElement('span');
+            pill.className = 'nested-pill';
+            pill.contentEditable = 'false';
+            pill.dataset.targetId = newId;
+            pill.innerText = `[${label || '...'}]`;
+            
+            const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+            if (range && selection.toString().trim() !== "") {
+                range.deleteContents();
+                range.insertNode(pill);
+            } else {
+                notepad.appendChild(pill);
+            }
+            notebookData[getCurrentId()].content = notepad.innerHTML;
+            updateLineNumbers();
+            saveToLocalStorage();
+        }
+
+        notepad.addEventListener('click', (e) => {
+            const pill = e.target.closest('.nested-pill');
+            if (pill) {
+                const targetId = pill.dataset.targetId;
+                if (isDeleteMode) {
+                    deleteNote(targetId, pill);
+                } else {
+                    path.push(targetId);
+                    render();
+                    saveToLocalStorage();
+                }
+            }
+        });
+
+        function deleteNote(targetId, pillElement) {
+            const note = notebookData[targetId];
+            if ((note.content.replace(/<[^>]*>/g, '').trim().length > 0) || (note.children?.length > 0)) {
+                if (!confirm(`Permanently delete "${note.name}" and all sub-notes?`)) return;
+            }
+            const parentId = getCurrentId();
+            notebookData[parentId].children = notebookData[parentId].children.filter(id => id !== targetId);
+            function recursiveDelete(id) {
+                if (notebookData[id]?.children) notebookData[id].children.forEach(c => recursiveDelete(c));
+                delete notebookData[id];
+            }
+            recursiveDelete(targetId);
+            pillElement.remove();
+            notebookData[parentId].content = notepad.innerHTML;
+            saveToLocalStorage();
+            toggleDeleteMode();
+        }
+
+        function toggleDeleteMode() {
+            isDeleteMode = !isDeleteMode;
+            document.getElementById('deleteModeBtn').classList.toggle('danger-active', isDeleteMode);
+            notepad.style.cursor = isDeleteMode ? "not-allowed" : "default";
+        }
+
+        function toggleWrap() {
+            notepad.classList.toggle('no-wrap');
+            document.getElementById('wrapBtn').classList.toggle('active');
+            updateLineNumbers();
+        }
+
+        function toggleLines() {
+            lineNumbers.classList.toggle('show-lines');
+            document.getElementById('lineBtn').classList.toggle('active');
+            updateLineNumbers();
+        }
+
+        function togglePersistence() {
+            isPersistent = !isPersistent;
+            localStorage.setItem('nest_persistent', isPersistent);
+            updateLockUI();
+            if (isPersistent) saveToLocalStorage();
+            else localStorage.removeItem(STORAGE_KEY);
+        }
+
+        function updateLockUI() {
+            const btn = document.getElementById('lockBtn');
+            btn.innerText = isPersistent ? '💎' : '⏳';
+            btn.classList.toggle('active', isPersistent);
+        }
+
+        function saveToLocalStorage() {
+            if (isPersistent) localStorage.setItem(STORAGE_KEY, JSON.stringify({ notebookData, path }));
+        }
+
+        function loadFromLocalStorage() {
+            if (isPersistent) {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                if (saved) {
+                    const imported = JSON.parse(saved);
+                    notebookData = imported.notebookData;
+                    path = imported.path;
+                }
+            }
+        }
+
+        function toggleNav() {
+            navOverlay.classList.toggle('open');
+            if(navOverlay.classList.contains('open')) renderNavTree();
+        }
+
+        function renderNavTree() {
+            navTree.innerHTML = '';
+            function build(id, container, depth = 0) {
+                if(!notebookData[id]) return;
+                const div = document.createElement('div');
+                div.className = 'nav-item';
+                div.style.color = id === getCurrentId() ? 'var(--primary)' : 'inherit';
+                div.innerText = (depth > 0 ? '↳ ' : '') + notebookData[id].name;
+                div.onclick = () => { jumpToNote(id); toggleNav(); };
+                container.appendChild(div);
+                if (notebookData[id].children) {
+                    const childContainer = document.createElement('div');
+                    childContainer.className = 'nav-indent';
+                    notebookData[id].children.forEach(childId => build(childId, childContainer, depth + 1));
+                    container.appendChild(childContainer);
+                }
+            }
+            build('root', navTree);
+        }
+
+        function jumpToNote(targetId) {
+            let newPath = null;
+            function search(currentId, currentPath) {
+                if (currentId === targetId) { newPath = [...currentPath]; return; }
+                notebookData[currentId].children?.forEach(cid => search(cid, [...currentPath, cid]));
+            }
+            search('root', ['root']);
+            if (newPath) { path = newPath; render(); saveToLocalStorage(); }
+        }
+
+        function execCmd(cmd) { document.execCommand(cmd, false, null); updateLineNumbers(); }
+        function downloadBackup() {
+            notebookData[getCurrentId()].content = notepad.innerHTML;
+            const blob = new Blob([JSON.stringify({ notebookData, path }, null, 2)], { type: "application/json" });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `nest_note_${Date.now()}.json`;
+            link.click();
+        }
+
+        function uploadBackup(event) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const imported = JSON.parse(e.target.result);
+                notebookData = imported.notebookData;
+                path = imported.path;
+                render();
+                saveToLocalStorage();
+            };
+            reader.readAsText(event.target.files[0]);
+        }
+
+        function resetAll() {
+            if (confirm("Delete everything?")) {
+                notebookData = { 'root': { name: 'Root', content: '', children: [] } };
+                path = ['root'];
+                localStorage.removeItem(STORAGE_KEY);
+                render();
+            }
+        }
+
+        loadFromLocalStorage();
+        updateLockUI();
+        render();
+    </script>
+</body>
+</html>
